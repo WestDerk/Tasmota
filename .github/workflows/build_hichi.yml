@@ -1,0 +1,38 @@
+name: Build Hichi ESP32-C3 SML
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install PlatformIO
+        run: pip install pioarduino
+
+      - name: Build tasmota32c3
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: platformio run -e tasmota32c3
+
+      - name: Show generated files
+        run: find build_output -maxdepth 3 -type f -print || true
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: hichi-tasmota32c3-sml
+          path: |
+            build_output/**/*.bin
+            build_output/**/*.bin.gz
+          if-no-files-found: error
