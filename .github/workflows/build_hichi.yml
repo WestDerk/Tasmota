@@ -13,25 +13,74 @@ jobs:
 
       - name: Show checked-out revision
         run: |
+          echo "===== Git revision ====="
           echo "Branch:"
           git branch --show-current
+
           echo "Commit:"
           git rev-parse HEAD
+
           echo "Last commit:"
           git log -1 --oneline
 
       - name: Show custom configuration files
         run: |
           echo "===== platformio_override.ini ====="
+
+          test -f platformio_override.ini || {
+            echo "ERROR: platformio_override.ini fehlt"
+            exit 1
+          }
+
           cat platformio_override.ini
 
           echo
           echo "===== tasmota/user_config_override.h ====="
+
+          test -f tasmota/user_config_override.h || {
+            echo "ERROR: tasmota/user_config_override.h fehlt"
+            exit 1
+          }
+
           cat tasmota/user_config_override.h
 
           echo
-          echo "===== workflow build command ====="
+          echo "===== Workflow build command ====="
           grep -n "platformio run" .github/workflows/build_hichi.yml
+
+      - name: Verify custom configuration
+        run: |
+          grep -q '^\[env:hichi32c3\]' platformio_override.ini || {
+            echo "ERROR: [env:hichi32c3] fehlt in platformio_override.ini"
+            exit 1
+          }
+
+          grep -q -- '-DUSE_SCRIPT' platformio_override.ini || {
+            echo "ERROR: -DUSE_SCRIPT fehlt in platformio_override.ini"
+            exit 1
+          }
+
+          grep -q -- '-DUSE_SML_M' platformio_override.ini || {
+            echo "ERROR: -DUSE_SML_M fehlt in platformio_override.ini"
+            exit 1
+          }
+
+          grep -q -- '-UUSE_RULES' platformio_override.ini || {
+            echo "ERROR: -UUSE_RULES fehlt in platformio_override.ini"
+            exit 1
+          }
+
+          grep -q 'USE_SCRIPT' tasmota/user_config_override.h || {
+            echo "ERROR: USE_SCRIPT fehlt in user_config_override.h"
+            exit 1
+          }
+
+          grep -q 'USE_SML_M' tasmota/user_config_override.h || {
+            echo "ERROR: USE_SML_M fehlt in user_config_override.h"
+            exit 1
+          }
+
+          echo "OK: Konfigurationsdateien enthalten die benötigten Optionen"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,7 +93,14 @@ jobs:
           enable-cache: false
 
       - name: Install PlatformIO
-        run: uv pip install --system pioarduino
+        run: |
+          uv pip install --system pioarduino
+          platformio --version
+
+      - name: Show effective PlatformIO configuration
+        run: |
+          echo "===== Effective PlatformIO configuration ====="
+          platformio project config
 
       - name: Build Hichi ESP32-C3 firmware
         env:
@@ -56,57 +112,90 @@ jobs:
 
       - name: Verify compiled drivers
         run: |
+          set -o pipefail
+
           ELF=".pio/build/hichi32c3/firmware.elf"
+          BIN=".pio/build/hichi32c3/firmware.bin"
 
-          if [ ! -f "$ELF" ]; then
-            echo "ERROR: firmware.elf not found"
+          test -f "$ELF" || {
+            echo "ERROR: $ELF wurde nicht erzeugt"
             exit 1
-          fi
+          }
 
-          NM=$(find ~/.platformio/packages -type f -name "riscv32-esp-elf-nm" | head -n1)
-
-          if [ -z "$NM" ]; then
-            echo "ERROR: riscv32-esp-elf-nm not found"
+          test -f "$BIN" || {
+            echo "ERROR: $BIN wurde nicht erzeugt"
             exit 1
-          fi
+          }
 
-          echo "===== Looking for Script driver ====="
-          if "$NM" -C "$ELF" | grep -i Xdrv10 ; then
-            echo "Script driver found"
-          else
-            echo "ERROR: Script driver missing"
+          NM="$(find ~/.platformio/packages \
+            -type f \
+            -name 'riscv32-esp-elf-nm' \
+            -perm -111 \
+            | head -n 1)"
+
+          test -n "$NM" || {
+            echo "ERROR: riscv32-esp-elf-nm wurde nicht gefunden"
             exit 1
-          fi
+          }
+
+          echo "Verwendetes nm-Werkzeug:"
+          echo "$NM"
+
+          SYMBOLS="$(mktemp)"
+          "$NM" -C "$ELF" > "$SYMBOLS"
 
           echo
-          echo "===== Looking for Sensor53 driver ====="
-          if "$NM" -C "$ELF" | grep -i Xsns53 ; then
-            echo "Sensor53 driver found"
-          else
-            echo "ERROR: Sensor53 driver missing"
-            exit 1
-          fi
+          echo "===== Prüfe Script-Treiber Xdrv10 ====="
 
-      - name: Collect firmware
+          grep -qE '(^|[[:space:]])Xdrv10\(unsigned (int|long)\)$|(^|[[:space:]])Xdrv10\(' "$SYMBOLS" || {
+            echo "ERROR: Script-Treiber Xdrv10 fehlt in firmware.elf"
+            exit 1
+          }
+
+          grep -E 'Xdrv10\(' "$SYMBOLS" | head -n 5
+
+          echo
+          echo "===== Prüfe Smart-Meter-Treiber Xsns53 ====="
+
+          grep -qE '(^|[[:space:]])Xsns53\(unsigned (int|long)\)$|(^|[[:space:]])Xsns53\(' "$SYMBOLS" || {
+            echo "ERROR: Smart-Meter-Treiber Xsns53 fehlt in firmware.elf"
+            exit 1
+          }
+
+          grep -E 'Xsns53\(' "$SYMBOLS" | head -n 5
+
+          rm -f "$SYMBOLS"
+
+          echo
+          echo "=========================================="
+          echo "OK: Script und Sensor53 sind vorhanden"
+          echo "=========================================="
+
+      - name: Collect OTA firmware
         run: |
           mkdir -p artifact
 
-          cp .pio/build/hichi32c3/firmware.bin artifact/hichi32c3.bin
+          SOURCE=".pio/build/hichi32c3/firmware.bin"
+          TARGET="artifact/hichi32c3-sml.bin"
 
-          if [ -f .pio/build/hichi32c3/firmware.factory.bin ]; then
-            cp .pio/build/hichi32c3/firmware.factory.bin artifact/hichi32c3.factory.bin
-          fi
+          test -f "$SOURCE" || {
+            echo "ERROR: OTA-Firmware fehlt: $SOURCE"
+            exit 1
+          }
+
+          cp "$SOURCE" "$TARGET"
+
+          echo "===== OTA firmware ====="
+          ls -lh "$TARGET"
 
           echo
-          echo "===== Firmware ====="
-          ls -lh artifact
+          echo "===== SHA-256 ====="
+          sha256sum "$TARGET"
 
-          sha256sum artifact/*
-
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: hichi-esp32c3-sml-firmware
-          path: artifact/*
+          path: artifact/hichi32c3-sml.bin
           if-no-files-found: error
           retention-days: 14
