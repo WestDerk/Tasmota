@@ -25,6 +25,13 @@ jobs:
           PYTHONUTF8: "1"
         run: platformio run -e tasmota32c3
 
+      - name: Verify Script and SML in firmware
+        run: |
+          BIN="$(find build_output -type f -name 'tasmota32c3.bin' | head -n 1)"
+          echo "Checking: $BIN"
+          test -n "$BIN"
+          strings "$BIN" | grep -i -E "Sensor53|No meter section"
+
       - name: Show generated files
         run: find build_output -maxdepth 3 -type f -print || true
 
