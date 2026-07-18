@@ -8,8 +8,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout selected branch
         uses: actions/checkout@v4
+
+      - name: Show checked-out revision
+        run: |
+          echo "Branch:"
+          git branch --show-current
+          echo "Commit:"
+          git rev-parse HEAD
+          echo "Last commit:"
+          git log -1 --oneline
+
+      - name: Show custom configuration files
+        run: |
+          echo "===== platformio_override.ini ====="
+          test -f platformio_override.ini
+          cat platformio_override.ini
+
+          echo
+          echo "===== tasmota/user_config_override.h ====="
+          test -f tasmota/user_config_override.h
+          cat tasmota/user_config_override.h
+
+          echo
+          echo "===== workflow build command ====="
+          grep -n "platformio run" .github/workflows/build_hichi.yml
+
+      - name: Verify custom environment exists
+        run: |
+          grep -q '^\[env:hichi32c3\]' platformio_override.ini || {
+            echo "ERROR: Environment [env:hichi32c3] fehlt."
+            exit 1
+          }
+
+          grep -q 'USE_SCRIPT' tasmota/user_config_override.h || {
+            echo "ERROR: USE_SCRIPT fehlt."
+            exit 1
+          }
+
+          grep -q 'USE_SML_M' tasmota/user_config_override.h || {
+            echo "ERROR: USE_SML_M fehlt."
+            exit 1
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,41 +65,56 @@ jobs:
       - name: Install PlatformIO
         run: uv pip install --system pioarduino
 
+      - name: List PlatformIO environments
+        run: platformio project config
+
       - name: Build Hichi ESP32-C3 firmware
         env:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
-        run: platformio run -e hichi32c3
-
-      - name: Show generated firmware files
         run: |
-          echo "Generated files:"
+          echo "Starting custom environment hichi32c3"
+          platformio run -e hichi32c3
+
+      - name: Show generated files
+        run: |
+          echo "===== .pio output ====="
+          find .pio/build/hichi32c3 -maxdepth 2 -type f -print || true
+
+          echo
+          echo "===== build_output ====="
           find build_output -type f -print || true
 
-      - name: Verify Smart Meter support
+      - name: Collect firmware
         run: |
-          BIN="$(find build_output -type f -name '*.bin' ! -name '*factory*' ! -name '*safeboot*' | head -n 1)"
+          mkdir -p artifact
 
-          echo "Checking firmware: $BIN"
+          if [ -f ".pio/build/hichi32c3/firmware.bin" ]; then
+            cp ".pio/build/hichi32c3/firmware.bin" \
+               "artifact/hichi32c3.bin"
+          fi
 
-          if [ -z "$BIN" ]; then
-            echo "No OTA firmware file found."
+          if [ -f ".pio/build/hichi32c3/firmware.factory.bin" ]; then
+            cp ".pio/build/hichi32c3/firmware.factory.bin" \
+               "artifact/hichi32c3.factory.bin"
+          fi
+
+          find build_output -type f \
+            \( -name '*.bin' -o -name '*.bin.gz' \) \
+            -exec cp -n {} artifact/ \; 2>/dev/null || true
+
+          echo "===== Artifact contents ====="
+          find artifact -type f -print
+
+          test -n "$(find artifact -type f -name '*.bin' -print -quit)" || {
+            echo "ERROR: Keine Firmwaredatei erzeugt."
             exit 1
-          fi
-
-          if strings "$BIN" | grep -qiE "Sensor53|No meter section"; then
-            echo "Sensor53/SML text found in firmware."
-          else
-            echo "Warning: Sensor53 text was not found in the binary."
-            echo "The build will continue; check the compile log for the Hichi override warning."
-          fi
+          }
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: hichi-esp32c3-sml-firmware
-          path: |
-            build_output/**/*.bin
-            build_output/**/*.bin.gz
+          path: artifact/*
           if-no-files-found: error
           retention-days: 14
