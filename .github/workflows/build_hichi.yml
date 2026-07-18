@@ -89,32 +89,53 @@ jobs:
         run: |
           mkdir -p artifact
 
-          if [ -f ".pio/build/hichi32c3/firmware.bin" ]; then
-            cp ".pio/build/hichi32c3/firmware.bin" \
-               "artifact/hichi32c3.bin"
-          fi
+          ELF=".pio/build/hichi32c3/firmware.elf"
+          BIN=".pio/build/hichi32c3/firmware.bin"
 
-          if [ -f ".pio/build/hichi32c3/firmware.factory.bin" ]; then
-            cp ".pio/build/hichi32c3/firmware.factory.bin" \
-               "artifact/hichi32c3.factory.bin"
-          fi
+          echo "===== Verifying compiled features ====="
 
-          find build_output -type f \
-            \( -name '*.bin' -o -name '*.bin.gz' \) \
-            -exec cp -n {} artifact/ \; 2>/dev/null || true
-
-          echo "===== Artifact contents ====="
-          find artifact -type f -print
-
-          test -n "$(find artifact -type f -name '*.bin' -print -quit)" || {
-            echo "ERROR: Keine Firmwaredatei erzeugt."
+          test -f "$ELF" || {
+            echo "ERROR: firmware.elf fehlt"
             exit 1
           }
+
+          test -f "$BIN" || {
+            echo "ERROR: firmware.bin fehlt"
+            exit 1
+          }
+
+          NM="$(find ~/.platformio/packages -type f -name 'riscv32-esp-elf-nm' | head -n 1)"
+
+          test -n "$NM" || {
+            echo "ERROR: riscv32-esp-elf-nm nicht gefunden"
+            exit 1
+          }
+
+          echo "Using nm: $NM"
+
+          "$NM" -C "$ELF" | grep -q 'Xdrv10' || {
+            echo "ERROR: Script-Treiber Xdrv10 fehlt"
+            exit 1
+          }
+
+          "$NM" -C "$ELF" | grep -q 'Xsns53' || {
+            echo "ERROR: Smart-Meter-Treiber Xsns53 fehlt"
+            exit 1
+          }
+
+          echo "OK: Script-Treiber Xdrv10 vorhanden"
+          echo "OK: Smart-Meter-Treiber Xsns53 vorhanden"
+
+          cp "$BIN" "artifact/hichi32c3-sml.bin"
+
+          echo "===== Firmware artifact ====="
+          ls -lh artifact/hichi32c3-sml.bin
+          sha256sum artifact/hichi32c3-sml.bin
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: hichi-esp32c3-sml-firmware
-          path: artifact/*
+          path: artifact/hichi32c3-sml.bin
           if-no-files-found: error
           retention-days: 14
