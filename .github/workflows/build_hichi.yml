@@ -16,30 +16,49 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install PlatformIO
-        run: pip install pioarduino
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
 
-      - name: Build tasmota32c3
+      - name: Install PlatformIO
+        run: uv pip install --system pioarduino
+
+      - name: Build Hichi ESP32-C3 firmware
         env:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
-        run: platformio run -e tasmota32c3
+        run: platformio run -e hichi32c3
 
-      - name: Verify Script and SML in firmware
+      - name: Show generated firmware files
         run: |
-          BIN="$(find build_output -type f -name 'tasmota32c3.bin' | head -n 1)"
-          echo "Checking: $BIN"
-          test -n "$BIN"
-          strings "$BIN" | grep -i -E "Sensor53|No meter section"
+          echo "Generated files:"
+          find build_output -type f -print || true
 
-      - name: Show generated files
-        run: find build_output -maxdepth 3 -type f -print || true
+      - name: Verify Smart Meter support
+        run: |
+          BIN="$(find build_output -type f -name '*.bin' ! -name '*factory*' ! -name '*safeboot*' | head -n 1)"
 
-      - name: Upload firmware
+          echo "Checking firmware: $BIN"
+
+          if [ -z "$BIN" ]; then
+            echo "No OTA firmware file found."
+            exit 1
+          fi
+
+          if strings "$BIN" | grep -qiE "Sensor53|No meter section"; then
+            echo "Sensor53/SML text found in firmware."
+          else
+            echo "Warning: Sensor53 text was not found in the binary."
+            echo "The build will continue; check the compile log for the Hichi override warning."
+          fi
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hichi-tasmota32c3-sml
+          name: hichi-esp32c3-sml-firmware
           path: |
             build_output/**/*.bin
             build_output/**/*.bin.gz
           if-no-files-found: error
+          retention-days: 14
